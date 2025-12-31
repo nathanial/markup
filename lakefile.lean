@@ -8,7 +8,7 @@ package markup where
     ⟨`relaxedAutoImplicit, false⟩
   ]
 
-require scribe from git "https://github.com/nathanial/scribe" @ "v0.0.1"
+require scribe from git "https://github.com/nathanial/scribe" @ "v0.0.2"
 require crucible from git "https://github.com/nathanial/crucible" @ "v0.0.1"
 
 @[default_target]
