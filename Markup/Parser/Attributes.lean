@@ -1,5 +1,5 @@
 /-
-  Markup/Parser/Attributes.lean - HTML attribute parsing
+  Markup/Parser/Attributes.lean - HTML attribute parsing (using Sift)
 -/
 
 import Markup.Parser.Entities
@@ -8,46 +8,45 @@ import Scribe
 namespace Markup.Parser
 
 open Ascii
-open Parser
 
 /-- Parse an attribute name -/
 def parseAttrName : Parser String := do
   let pos ← getPosition
-  match ← peek? with
+  match ← Sift.peek with
   | some c =>
     if !isAttrNameStart c then
-      throw (.invalidAttribute pos s!"expected attribute name, got '{c}'")
+      failWith (.invalidAttribute pos s!"expected attribute name, got '{c}'")
   | none =>
-    throw (.unexpectedEnd "attribute name")
+    failWith (.unexpectedEnd "attribute name")
   let name ← readWhile isAttrNameChar
   -- Normalize to lowercase
-  return stringToLower name
+  pure (stringToLower name)
 
 /-- Parse a double-quoted attribute value -/
 def parseDoubleQuotedValue : Parser String := do
   expect '"'
   let value ← parseTextContent (· == '"')
   expect '"'
-  return value
+  pure value
 
 /-- Parse a single-quoted attribute value -/
 def parseSingleQuotedValue : Parser String := do
   expect '\''
   let value ← parseTextContent (· == '\'')
   expect '\''
-  return value
+  pure value
 
 /-- Parse an unquoted attribute value -/
 def parseUnquotedValue : Parser String := do
   let pos ← getPosition
   let value ← readWhile isUnquotedAttrChar
   if value.isEmpty then
-    throw (.invalidAttribute pos "empty unquoted attribute value")
-  return value
+    failWith (.invalidAttribute pos "empty unquoted attribute value")
+  pure value
 
 /-- Parse an attribute value (quoted or unquoted) -/
 def parseAttrValue : Parser String := do
-  match ← peek? with
+  match ← Sift.peek with
   | some '"' => parseDoubleQuotedValue
   | some '\'' => parseSingleQuotedValue
   | some c =>
@@ -55,9 +54,9 @@ def parseAttrValue : Parser String := do
       parseUnquotedValue
     else
       let pos ← getPosition
-      throw (.invalidAttribute pos s!"unexpected character '{c}' in attribute value")
+      failWith (.invalidAttribute pos s!"unexpected character '{c}' in attribute value")
   | none =>
-    throw (.unexpectedEnd "attribute value")
+    failWith (.unexpectedEnd "attribute value")
 
 /-- Parse a single attribute (name, optional =value) -/
 def parseAttribute : Parser Scribe.Attr := do
@@ -67,45 +66,39 @@ def parseAttribute : Parser Scribe.Attr := do
   if ← tryChar '=' then
     skipWhitespace
     let value ← parseAttrValue
-    return { name, value }
+    pure { name, value }
   else
     -- Boolean attribute (e.g., disabled, checked)
-    return { name, value := name }
+    pure { name, value := name }
 
 /-- Check if we're at an attribute start position -/
 def atAttributeStart : Parser Bool := do
-  match ← peek? with
-  | some c => return isAttrNameStart c
-  | none => return false
+  match ← Sift.peek with
+  | some c => pure (isAttrNameStart c)
+  | none => pure false
 
 /-- Parse all attributes until > or /> -/
-def parseAttributes : Parser (List Scribe.Attr) := do
-  let mut attrs : List Scribe.Attr := []
-  let mut seen : List String := []  -- Track seen attribute names
-
-  while true do
+partial def parseAttributes : Parser (List Scribe.Attr) := do
+  let rec loop (attrs : List Scribe.Attr) (seen : List String) : Parser (List Scribe.Attr) := do
     skipWhitespace
-    match ← peek? with
-    | some '>' => break
+    match ← Sift.peek with
+    | some '>' => pure attrs
     | some '/' =>
       -- Check for />
       let ahead ← peekString 2
-      if ahead == "/>" then break
-      -- Otherwise / might be part of something else
-      break
+      if ahead == "/>" then pure attrs
+      else pure attrs  -- Otherwise / might be part of something else
     | some c =>
       if isAttrNameStart c then
         let pos ← getPosition
         let attr ← parseAttribute
         -- Check for duplicates
         if seen.contains attr.name then
-          throw (.duplicateAttribute pos attr.name)
-        seen := attr.name :: seen
-        attrs := attrs ++ [attr]
+          failWith (.duplicateAttribute pos attr.name)
+        loop (attrs ++ [attr]) (attr.name :: seen)
       else
-        break
-    | none => break
-
-  return attrs
+        pure attrs
+    | none => pure attrs
+  loop [] []
 
 end Markup.Parser

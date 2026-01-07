@@ -1,5 +1,5 @@
 /-
-  Markup/Parser/Elements.lean - HTML element and tag parsing
+  Markup/Parser/Elements.lean - HTML element and tag parsing (using Sift)
 -/
 
 import Markup.Parser.Attributes
@@ -8,7 +8,6 @@ import Scribe
 namespace Markup.Parser
 
 open Ascii
-open Parser
 
 /-- List of HTML void elements (self-closing, no content) -/
 def voidElements : List String := [
@@ -32,15 +31,15 @@ def isRawTextElement (tag : String) : Bool :=
 /-- Parse a tag name -/
 def parseTagName : Parser String := do
   let pos ← getPosition
-  match ← peek? with
+  match ← Sift.peek with
   | some c =>
     if !isTagNameStart c then
-      throw (.invalidTagName pos s!"{c}")
+      failWith (.invalidTagName pos s!"{c}")
   | none =>
-    throw (.unexpectedEnd "tag name")
+    failWith (.unexpectedEnd "tag name")
   let name ← readWhile isTagNameChar
   -- Normalize to lowercase
-  return stringToLower name
+  pure (stringToLower name)
 
 /-- Parse an opening tag: <tagname attrs...> or <tagname attrs... />
     Returns (tagName, attributes, selfClosing) -/
@@ -53,7 +52,7 @@ def parseOpenTag : Parser (String × List Scribe.Attr × Bool) := do
   let selfClosing ← tryString "/>"
   if !selfClosing then
     expect '>'
-  return (tag, attrs, selfClosing)
+  pure (tag, attrs, selfClosing)
 
 /-- Parse a closing tag: </tagname> -/
 def parseCloseTag : Parser String := do
@@ -61,15 +60,14 @@ def parseCloseTag : Parser String := do
   let tag ← parseTagName
   skipWhitespace
   expect '>'
-  return tag
+  pure tag
 
 /-- Parse raw text content until closing tag -/
-def parseRawContent (closingTag : String) : Parser String := do
-  let mut result := ""
-  while true do
+partial def parseRawContent (closingTag : String) : Parser String := do
+  let rec loop (acc : String) : Parser String := do
     if ← atEnd then
       let pos ← getPosition
-      throw (.unclosedTag pos closingTag)
+      failWith (.unclosedTag pos closingTag)
     -- Check for closing tag (case-insensitive)
     let ahead ← peekString (2 + closingTag.length + 1)
     let aheadLower := stringToLower ahead
@@ -79,11 +77,21 @@ def parseRawContent (closingTag : String) : Parser String := do
         -- Check next char is > or whitespace
         let full ← peekString (2 + closingTag.length + 1)
         if full.length > 2 + closingTag.length then
-          let lastChar := full.get ⟨2 + closingTag.length⟩
+          let lastChar := String.Pos.Raw.get full ⟨2 + closingTag.length⟩
           if lastChar == '>' || isWhitespace lastChar then
-            break
-    let c ← next
-    result := result.push c
-  return result
+            pure acc
+          else
+            let c ← Sift.anyChar
+            loop (acc.push c)
+        else
+          let c ← Sift.anyChar
+          loop (acc.push c)
+      else
+        let c ← Sift.anyChar
+        loop (acc.push c)
+    else
+      let c ← Sift.anyChar
+      loop (acc.push c)
+  loop ""
 
 end Markup.Parser

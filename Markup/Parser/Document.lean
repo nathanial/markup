@@ -1,5 +1,5 @@
 /-
-  Markup/Parser/Document.lean - Top-level document parsing
+  Markup/Parser/Document.lean - Top-level document parsing (using Sift)
 -/
 
 import Markup.Parser.Elements
@@ -8,113 +8,118 @@ import Scribe
 namespace Markup.Parser
 
 open Scribe
-open Parser
+open Ascii
 
 /-- Parse an HTML comment: <!-- ... --> -/
-def parseComment : Parser Unit := do
+partial def parseComment : Parser Unit := do
   let pos ← getPosition
   let _ ← expectString "<!--"
   -- Read until -->
-  let mut foundEnd := false
-  while !foundEnd do
+  let rec loop : Parser Unit := do
     if ← atEnd then
-      throw (.invalidComment pos "unclosed comment")
+      failWith (.invalidComment pos "unclosed comment")
     let ahead ← peekString 3
     if ahead == "-->" then
       let _ ← expectString "-->"
-      foundEnd := true
     else if ahead.startsWith "--" then
       -- "--" inside comment is technically invalid in strict HTML
-      throw (.invalidComment pos "\"--\" not allowed inside comments")
+      failWith (.invalidComment pos "\"--\" not allowed inside comments")
     else
-      let _ ← next
+      let _ ← Sift.anyChar
+      loop
+  loop
 
 /-- Parse DOCTYPE declaration: <!DOCTYPE html> -/
 def parseDoctype : Parser Unit := do
   let _ ← expectString "<!"
   -- Read DOCTYPE (case-insensitive)
-  let doctype ← readWhile Ascii.isAlpha
-  if Ascii.stringToLower doctype != "doctype" then
+  let doctype ← readWhile isAlpha
+  if stringToLower doctype != "doctype" then
     let pos ← getPosition
-    throw (.other pos s!"expected DOCTYPE, got {doctype}")
+    failWith (.other pos s!"expected DOCTYPE, got {doctype}")
   skipWhitespace
   -- Read until >
-  let _ ← readUntilChar (· == '>')
+  let _ ← readWhile (· != '>')
   expect '>'
 
 /-- Parse a text node -/
 def parseTextNode : Parser Html := do
   let text ← parseText
-  return .text text
+  pure (.text text)
 
 /-- Check if at a closing tag for a specific element -/
 def atCloseTag (tag : String) : Parser Bool := do
   let ahead ← peekString (2 + tag.length + 1)
-  let aheadLower := Ascii.stringToLower ahead
-  if !aheadLower.startsWith "</" then return false
-  let tagPart := aheadLower.extract ⟨2⟩ ⟨2 + tag.length⟩
-  if tagPart != tag then return false
-  -- Check the character after tag name
-  if ahead.length > 2 + tag.length then
-    let c := ahead.get ⟨2 + tag.length⟩
-    return c == '>' || Ascii.isWhitespace c
-  return false
+  let aheadLower := stringToLower ahead
+  if !aheadLower.startsWith "</" then pure false
+  else
+    let tagPart := String.Pos.Raw.extract aheadLower ⟨2⟩ ⟨2 + tag.length⟩
+    if tagPart != tag then pure false
+    else
+      -- Check the character after tag name
+      if ahead.length > 2 + tag.length then
+        let c := String.Pos.Raw.get ahead ⟨2 + tag.length⟩
+        pure (c == '>' || isWhitespace c)
+      else
+        pure false
 
 mutual
   /-- Parse a single node (element, text, or skip comment) -/
   partial def parseNode : Parser (Option Html) := do
     skipWhitespace
-    if ← atEnd then return none
-    match ← peek? with
-    | some '<' =>
-      -- Check what kind of < construct
-      let ahead ← peekString 4
-      if ahead.startsWith "<!--" then
-        -- Comment - skip it
-        parseComment
-        return none  -- Comments produce no HTML node
-      else if ahead.startsWith "<!" then
-        -- DOCTYPE or other declaration
-        parseDoctype
-        return none
-      else if ahead.startsWith "</" then
-        -- Closing tag - don't consume, let caller handle
-        return none
-      else
-        -- Opening tag
-        let elem ← parseElement
-        return some elem
-    | some _ =>
-      -- Text content
-      let text ← parseText
-      if text.isEmpty || text.all Ascii.isWhitespace then
-        return none  -- Skip whitespace-only text
-      return some (.text text)
-    | none => return none
+    if ← atEnd then pure none
+    else
+      match ← Sift.peek with
+      | some '<' =>
+        -- Check what kind of < construct
+        let ahead ← peekString 4
+        if ahead.startsWith "<!--" then
+          -- Comment - skip it
+          parseComment
+          pure none  -- Comments produce no HTML node
+        else if ahead.startsWith "<!" then
+          -- DOCTYPE or other declaration
+          parseDoctype
+          pure none
+        else if ahead.startsWith "</" then
+          -- Closing tag - don't consume, let caller handle
+          pure none
+        else
+          -- Opening tag
+          let elem ← parseElement
+          pure (some elem)
+      | some _ =>
+        -- Text content
+        let text ← parseText
+        if text.isEmpty || text.all isWhitespace then
+          pure none  -- Skip whitespace-only text
+        else
+          pure (some (.text text))
+      | none => pure none
 
   /-- Parse children until a closing tag or end -/
   partial def parseChildren (parentTag : Option String) : Parser (List Html) := do
-    let mut children : List Html := []
-    while true do
+    let rec loop (children : List Html) : Parser (List Html) := do
       -- Check for closing tag
-      match parentTag with
-      | some tag =>
-        if ← atCloseTag tag then break
-      | none => pure ()
-
-      if ← atEnd then break
-
-      match ← parseNode with
-      | some node => children := children ++ [node]
-      | none =>
-        -- Check if we hit a closing tag or EOF
-        match ← peek? with
-        | some '<' =>
-          let ahead ← peekString 2
-          if ahead == "</" then break
-        | _ => break
-
-    return children
+      let shouldStop ← match parentTag with
+        | some tag => atCloseTag tag
+        | none => pure false
+      if shouldStop then
+        pure children
+      else if ← atEnd then
+        pure children
+      else
+        match ← parseNode with
+        | some node => loop (children ++ [node])
+        | none =>
+          -- Check if we hit a closing tag or EOF
+          match ← Sift.peek with
+          | some '<' =>
+            let ahead ← peekString 2
+            if ahead == "</" then pure children
+            else loop children
+          | _ => pure children
+    loop []
 
   /-- Parse a complete element -/
   partial def parseElement : Parser Html := do
@@ -123,49 +128,51 @@ mutual
 
     -- Void elements never have children
     if isVoidElement tag || selfClosing then
-      return .element tag attrs []
-
-    -- Raw text elements (script, style, etc.)
-    if isRawTextElement tag then
+      pure (.element tag attrs [])
+    else if isRawTextElement tag then
+      -- Raw text elements (script, style, etc.)
       let content ← parseRawContent tag
       let _ ← parseCloseTag  -- Consume the closing tag
-      return .element tag attrs [.raw content]
+      pure (.element tag attrs [.raw content])
+    else
+      -- Push tag for validation
+      pushTag tag
 
-    -- Push tag for validation
-    pushTag tag
+      -- Parse children
+      let children ← parseChildren (some tag)
 
-    -- Parse children
-    let children ← parseChildren (some tag)
+      -- Expect and consume closing tag
+      if ← atEnd then
+        failWith (.unclosedTag openPos tag)
 
-    -- Expect and consume closing tag
-    if ← atEnd then
-      throw (.unclosedTag openPos tag)
+      let closeTag ← parseCloseTag
+      if closeTag != tag then
+        let pos ← getPosition
+        failWith (.unmatchedCloseTag pos closeTag (some tag))
 
-    let closeTag ← parseCloseTag
-    if closeTag != tag then
-      let pos ← getPosition
-      throw (.unmatchedCloseTag pos closeTag (some tag))
+      let _ ← popTag
 
-    let _ ← popTag
-
-    return .element tag attrs children
+      pure (.element tag attrs children)
 end
 
 /-- Parse a complete HTML document -/
-def parseDocument : Parser Html := do
+partial def parseDocument : Parser Html := do
   skipWhitespace
 
   -- Skip leading comments and DOCTYPE
-  while true do
+  let rec skipPreamble : Parser Unit := do
     let ahead ← peekString 4
     if ahead.startsWith "<!--" then
       parseComment
       skipWhitespace
+      skipPreamble
     else if ahead.startsWith "<!" then
       parseDoctype
       skipWhitespace
+      skipPreamble
     else
-      break
+      pure ()
+  skipPreamble
 
   -- Parse root elements
   let children ← parseChildren none
@@ -174,27 +181,27 @@ def parseDocument : Parser Html := do
 
   -- Check for trailing content
   if !(← atEnd) then
-    match ← peek? with
+    match ← Sift.peek with
     | some '<' =>
       let ahead ← peekString 2
       if ahead == "</" then
         let pos ← getPosition
         let closeTag ← parseCloseTag
-        throw (.unmatchedCloseTag pos closeTag none)
+        failWith (.unmatchedCloseTag pos closeTag none)
     | _ => pure ()
 
   match children with
-  | [] => throw (.other { offset := 0, line := 1, column := 1 } "empty document")
-  | [single] => return single
-  | multiple => return .fragment multiple
+  | [] => failWith (.other { offset := 0, line := 1, column := 1 } "empty document")
+  | [single] => pure single
+  | multiple => pure (.fragment multiple)
 
 /-- Parse an HTML fragment (multiple root elements allowed) -/
 def parseFragment : Parser Html := do
   let children ← parseChildren none
   skipWhitespace
   match children with
-  | [] => return .fragment []
-  | [single] => return single
-  | multiple => return .fragment multiple
+  | [] => pure (.fragment [])
+  | [single] => pure single
+  | multiple => pure (.fragment multiple)
 
 end Markup.Parser

@@ -18,7 +18,7 @@ namespace Markup
     ```
 -/
 def parse (input : String) : ParseResult Scribe.Html :=
-  Parser.Parser.run Parser.parseDocument input
+  Parser.run Parser.parseDocument input
 
 /-- Parse an HTML fragment (allows multiple root elements).
 
@@ -30,7 +30,7 @@ def parse (input : String) : ParseResult Scribe.Html :=
     ```
 -/
 def parseFragment (input : String) : ParseResult Scribe.Html :=
-  Parser.Parser.run Parser.parseFragment input
+  Parser.run Parser.parseFragment input
 
 /-- Parse an HTML string, throwing an IO error on parse failure.
 
