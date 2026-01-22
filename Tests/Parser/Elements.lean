@@ -105,6 +105,6 @@ test "parse style raw content" := do
     | _ => ensure false "expected style with raw content"
   | .error e => ensure false s!"parse failed: {e}"
 
-#generate_tests
+
 
 end Tests.Parser.Elements

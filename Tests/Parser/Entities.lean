@@ -113,6 +113,6 @@ test "decode unicode entity" := do
     | _ => ensure false "expected p with text"
   | .error e => ensure false s!"parse failed: {e}"
 
-#generate_tests
+
 
 end Tests.Parser.Entities

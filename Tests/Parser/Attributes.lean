@@ -90,6 +90,6 @@ test "parse data attributes" := do
     | _ => ensure false "expected div with data attributes"
   | .error e => ensure false s!"parse failed: {e}"
 
-#generate_tests
+
 
 end Tests.Parser.Attributes

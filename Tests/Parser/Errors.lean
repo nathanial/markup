@@ -92,6 +92,6 @@ test "reject empty attribute value" := do
     ensure (errorContains e "invalid attribute" || errorContains e "unexpected character")
       s!"expected invalid attribute error, got {e}"
 
-#generate_tests
+
 
 end Tests.Parser.Errors

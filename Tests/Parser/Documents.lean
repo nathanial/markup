@@ -100,6 +100,6 @@ test "whitespace-only text stripped" := do
     | _ => ensure false "expected fragment"
   | .error e => ensure false s!"parse failed: {e}"
 
-#generate_tests
+
 
 end Tests.Parser.Documents
